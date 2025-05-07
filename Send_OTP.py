@@ -1,64 +1,60 @@
 import boto3
 import json
+from botocore.exceptions import ClientError
 
-
+# Initialize SES client and DynamoDB resource
 ses = boto3.client('ses')
-from_address = 'mohanaads18@gmail.com'  
-
-
 dynamodb = boto3.resource('dynamodb')
 
-table_name = "otpstore"  
+# SES sender email (must be verified in SES)
+from_address = 'mohanaads18@gmail.com'
 
-
+# DynamoDB table
+table_name = "otpstore"
 table = dynamodb.Table(table_name)
 
 def lambda_handler(event, context):
     """
-    Lambda function to process DynamoDB stream events and send OTP emails using AWS SES.
+    Lambda function to process DynamoDB stream events and send OTP emails using SES.
     """
     try:
-        # Ensure 'Records' key exists in the event
+        print("Full event received: " + json.dumps(event))
+        
+        # Check if 'Records' key exists in the event (required for DynamoDB stream event)
         if 'Records' not in event:
             raise ValueError("Invalid event format: Missing 'Records' key.")
-
+        
+        # Process each record in the event
         for record in event['Records']:
-            # Check for valid DynamoDB 'INSERT' events
-            if record.get('eventName') == 'INSERT' and 'dynamodb' in record:
-                # Extract data from the NewImage
+            if record.get('eventName') in ['INSERT', 'MODIFY']:  # Process both INSERT and MODIFY events
                 new_image = record['dynamodb'].get('NewImage', {})
-                
-                # Debug print to see the structure of the NewImage
-                print(f"NewImage: {new_image}")
-                
-                # Extract OTP from 'pk' and email from 'email' field
-                otp = new_image.get('otp', {}).get('S')  # Now looking for 'pk' for OTP
-                to_address = new_image.get('email', {}).get('S')  # Extract email if available
+                print(f"NewImage: {json.dumps(new_image)}")
 
-                if otp and to_address:
-                    print(f"Preparing to send OTP {otp} to {to_address}")
-                    send_email(otp, to_address)
+                # Extract email and OTP from DynamoDB record
+                email = new_image.get('email', {}).get('S')
+                otp = new_image.get('otp', {}).get('S')
+
+                if email and otp:
+                    print(f"Sending OTP {otp} to {email}")
+                    send_email(otp, email)
                 else:
-                    print(f"Missing 'otp' or 'email' in DynamoDB record. OTP: {otp}, Email: {to_address}")
+                    print(f"Missing email or OTP in record. Email: {email}, OTP: {otp}")
 
     except Exception as e:
         print(f"Error processing event: {str(e)}")
         return {
             "statusCode": 500,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-            },
-            "body": json.dumps({"message": "OTP generation failed", "error": str(e)})
+            "body": json.dumps({
+                "message": "OTP processing failed",
+                "error": str(e)
+            })
         }
 
     return {
         "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-        },
-        "body": json.dumps({"message": "OTP emails processed successfully."})
+        "body": json.dumps({
+            "message": "OTP emails processed successfully."
+        })
     }
 
 def send_email(otp, to_address):
@@ -99,8 +95,9 @@ def send_email(otp, to_address):
     }
 
     try:
+        # Send email using SES
         response = ses.send_email(**params)
         print(f"Email sent successfully! Message ID: {response['MessageId']}")
-    except Exception as e:
-        print(f"Error sending email: {str(e)}")
-        raise
+    except ClientError as e:
+        print(f"Error sending email: {e}")
+        raise e  # Reraise the error to capture it in the main Lambda function

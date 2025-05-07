@@ -3,74 +3,75 @@ import json
 from botocore.exceptions import ClientError
 from datetime import datetime
 
-
+# Initialize DynamoDB resource
 dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('otpstore')  
+table = dynamodb.Table('otpstore')  # Replace with your actual DynamoDB table name
 
 def lambda_handler(event, context):
     """
     Lambda function to verify OTP sent by the user.
     """
     try:
-      
-        print("Received event: " + json.dumps(event))
+        print("Received event:", json.dumps(event))
         
-        # Extract parameters from the body field of the event
+        # Extract request body safely
         body = json.loads(event.get('body', '{}'))
-        otp_received = body.get('otp')  # OTP value received for verification
-        email_received = body.get('email')  # Email received for verification
+        otp_received = body.get('otp')
+        email_received = body.get('email')
 
-        
         if not otp_received or not email_received:
-            return {
-                'statusCode': 400,
-                'body': json.dumps('Missing OTP or Email in the request')
-            }
+            return response_error(400, "Missing OTP or Email in the request")
 
-      
         print(f"Received verification request for OTP: {otp_received} with Email: {email_received}")
 
-        
-        response = table.get_item(
-            Key={'otp': otp_received}  # Use OTP as the partition key to look up the item
-        )
+        # Query DynamoDB using email (Partition key)
+        response = table.get_item(Key={'email': email_received})
 
-        
-        if 'Item' in response:
-            stored_otp = response['Item']['otp']
-            stored_email = response['Item']['email']
-            expiry_at = response['Item']['expiryAt']
+        if "Item" in response:
+            stored_otp = response["Item"]["otp"]
+            expiry_at = response["Item"]["expiryAt"]
 
-            print(f"Stored OTP: {stored_otp}, Stored Email: {stored_email}, Expiry: {expiry_at}")
+            print(f"Stored OTP: {stored_otp}, Expiry: {expiry_at}")
 
-            
+            # Check if OTP is expired
             current_time = int(datetime.utcnow().timestamp())
             if current_time > expiry_at:
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps('OTP has expired')
-                }
+                return response_error(400, "OTP has expired")
 
-      
-            if stored_otp == otp_received and stored_email == email_received:
-                return {
-                    'statusCode': 200,
-                    'body': json.dumps('OTP Verified Successfully!')
-                }
+            # Check if OTP matches
+            if stored_otp == otp_received:
+                return response_success({"message": "OTP Verified Successfully!"})
             else:
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps('Invalid OTP or Email')
-                }
+                return response_error(400, "Invalid OTP")
+
         else:
-            return {
-                'statusCode': 404,
-                'body': json.dumps('OTP not found in the database')
-            }
+            return response_error(404, "OTP not found for the provided email")
 
     except ClientError as e:
-        print(f"Error verifying OTP: {e}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps('Internal Server Error')
-        }
+        print(f"Error verifying OTP: {str(e)}")
+        return response_error(500, "Internal Server Error")
+
+# ✅ **CORS Fix - Structured API Responses**
+def response_success(data):
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": "*",  # ✅ Fix for CORS
+            "Access-Control-Allow-Methods": "OPTIONS, POST",
+            "Access-Control-Allow-Headers": "Content-Type"
+        },
+        "body": json.dumps(data)
+    }
+
+def response_error(status_code, message):
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": "*",  # ✅ Fix for CORS
+            "Access-Control-Allow-Methods": "OPTIONS, POST",
+            "Access-Control-Allow-Headers": "Content-Type"
+        },
+        "body": json.dumps({"message": message})
+    }
